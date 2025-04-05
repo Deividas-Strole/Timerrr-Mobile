@@ -3,7 +3,8 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(StopwatchApp());
 }
 
@@ -25,80 +26,132 @@ class StopwatchPage extends StatefulWidget {
 
 class _StopwatchPageState extends State<StopwatchPage>
     with WidgetsBindingObserver {
-  late Timer _timer;
-  int _milliseconds = 0;
+  // Method channel for native code
+  static const platform = MethodChannel('com.example.timer/stopwatch');
+
+  Timer? _displayTimer;
+  int _elapsedMilliseconds = 0;
   bool _isRunning = false;
-  DateTime? _lastTime;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Keep the screen on
+    WakelockPlus.enable();
   }
 
   @override
   void dispose() {
-    if (_isRunning) {
-      _timer.cancel();
-      WakelockPlus.disable();
-    }
     WidgetsBinding.instance.removeObserver(this);
+    if (_displayTimer != null && _displayTimer!.isActive) {
+      _displayTimer!.cancel();
+    }
+    WakelockPlus.disable();
+    _stopNativeStopwatch();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (_isRunning) {
-      if (state == AppLifecycleState.paused ||
-          state == AppLifecycleState.inactive) {
-        // App is going to background
-        _timer.cancel();
-        _lastTime = DateTime.now();
-      } else if (state == AppLifecycleState.resumed && _lastTime != null) {
-        // App is coming back to foreground
-        final now = DateTime.now();
-        final difference = now.difference(_lastTime!).inMilliseconds;
-        _milliseconds += difference;
-        _startTimer();
+    if (state == AppLifecycleState.resumed) {
+      if (_isRunning) {
+        // Update the elapsed time from native code
+        _updateElapsedTimeFromNative();
+        // Restart the display timer
+        _startDisplayTimer();
+      }
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
+      // Just stop the display timer but let the native stopwatch run
+      if (_displayTimer != null && _displayTimer!.isActive) {
+        _displayTimer!.cancel();
       }
     }
   }
 
-  void _startTimer() {
-    if (!_isRunning) {
-      // Keep the screen on while timer is running
-      WakelockPlus.enable();
-
-      _timer = Timer.periodic(Duration(milliseconds: 10), (timer) {
-        setState(() {
-          _milliseconds += 10;
-        });
-      });
-
-      setState(() {
-        _isRunning = true;
-        _lastTime = null;
-      });
+  Future<void> _startNativeStopwatch() async {
+    try {
+      await platform.invokeMethod('startStopwatch');
+    } on PlatformException catch (e) {
+      print("Failed to start native stopwatch: ${e.message}");
     }
   }
 
-  void _stopTimer() {
-    if (_isRunning) {
-      _timer.cancel();
-      WakelockPlus.disable();
-      setState(() {
-        _isRunning = false;
-      });
+  Future<void> _stopNativeStopwatch() async {
+    try {
+      await platform.invokeMethod('stopStopwatch');
+    } on PlatformException catch (e) {
+      print("Failed to stop native stopwatch: ${e.message}");
     }
   }
 
-  void _resetTimer() {
-    _timer.cancel();
-    WakelockPlus.disable();
+  Future<void> _resetNativeStopwatch() async {
+    try {
+      await platform.invokeMethod('resetStopwatch');
+    } on PlatformException catch (e) {
+      print("Failed to reset native stopwatch: ${e.message}");
+    }
+  }
+
+  Future<void> _updateElapsedTimeFromNative() async {
+    try {
+      final int elapsedTime = await platform.invokeMethod('getElapsedTime');
+      setState(() {
+        _elapsedMilliseconds = elapsedTime;
+      });
+    } on PlatformException catch (e) {
+      print("Failed to get elapsed time: ${e.message}");
+    }
+  }
+
+  void _startDisplayTimer() {
+    _displayTimer = Timer.periodic(Duration(milliseconds: 16), (timer) {
+      _updateElapsedTimeFromNative();
+    });
+  }
+
+  void _startTimer() async {
+    // Start a native stopwatch implementation
+    await _startNativeStopwatch();
+
+    // Start a timer for display updates only
+    _startDisplayTimer();
+
     setState(() {
-      _milliseconds = 0;
+      _isRunning = true;
+    });
+  }
+
+  void _stopTimer() async {
+    // Stop native stopwatch
+    await _stopNativeStopwatch();
+
+    // Stop the display timer
+    if (_displayTimer != null && _displayTimer!.isActive) {
+      _displayTimer!.cancel();
+    }
+
+    // Get the final time
+    await _updateElapsedTimeFromNative();
+
+    setState(() {
       _isRunning = false;
-      _lastTime = null;
+    });
+  }
+
+  void _resetTimer() async {
+    // Reset native stopwatch
+    await _resetNativeStopwatch();
+
+    // Stop the display timer
+    if (_displayTimer != null && _displayTimer!.isActive) {
+      _displayTimer!.cancel();
+    }
+
+    setState(() {
+      _elapsedMilliseconds = 0;
+      _isRunning = false;
     });
   }
 
@@ -125,7 +178,7 @@ class _StopwatchPageState extends State<StopwatchPage>
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
             Text(
-              _formatTime(_milliseconds),
+              _formatTime(_elapsedMilliseconds),
               style: TextStyle(fontSize: 48.0, fontWeight: FontWeight.bold),
             ),
             SizedBox(height: 20),
