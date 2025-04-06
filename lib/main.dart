@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -26,48 +28,29 @@ class StopwatchPage extends StatefulWidget {
 
 class _StopwatchPageState extends State<StopwatchPage>
     with WidgetsBindingObserver {
-  // Method channel for native code
   static const platform = MethodChannel('com.example.timer/stopwatch');
-
   Timer? _displayTimer;
   int _elapsedMilliseconds = 0;
   bool _isRunning = false;
+  final TextEditingController _notesController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // Keep the screen on
     WakelockPlus.enable();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _notesController.dispose();
     if (_displayTimer != null && _displayTimer!.isActive) {
       _displayTimer!.cancel();
     }
     WakelockPlus.disable();
     _stopNativeStopwatch();
     super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      if (_isRunning) {
-        // Update the elapsed time from native code
-        _updateElapsedTimeFromNative();
-        // Restart the display timer
-        _startDisplayTimer();
-      }
-    } else if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.inactive) {
-      // Just stop the display timer but let the native stopwatch run
-      if (_displayTimer != null && _displayTimer!.isActive) {
-        _displayTimer!.cancel();
-      }
-    }
   }
 
   Future<void> _startNativeStopwatch() async {
@@ -112,43 +95,29 @@ class _StopwatchPageState extends State<StopwatchPage>
   }
 
   void _startTimer() async {
-    // Start a native stopwatch implementation
     await _startNativeStopwatch();
-
-    // Start a timer for display updates only
     _startDisplayTimer();
-
     setState(() {
       _isRunning = true;
     });
   }
 
   void _stopTimer() async {
-    // Stop native stopwatch
     await _stopNativeStopwatch();
-
-    // Stop the display timer
     if (_displayTimer != null && _displayTimer!.isActive) {
       _displayTimer!.cancel();
     }
-
-    // Get the final time
     await _updateElapsedTimeFromNative();
-
     setState(() {
       _isRunning = false;
     });
   }
 
   void _resetTimer() async {
-    // Reset native stopwatch
     await _resetNativeStopwatch();
-
-    // Stop the display timer
     if (_displayTimer != null && _displayTimer!.isActive) {
       _displayTimer!.cancel();
     }
-
     setState(() {
       _elapsedMilliseconds = 0;
       _isRunning = false;
@@ -169,6 +138,31 @@ class _StopwatchPageState extends State<StopwatchPage>
     return "$hoursStr:$minutesStr:$secondsStr:$hundredsStr";
   }
 
+  Future<void> _saveNote() async {
+    if (_notesController.text.isNotEmpty) {
+      final prefs = await SharedPreferences.getInstance();
+      List<String> notes = prefs.getStringList('notes') ?? [];
+      String note = json.encode({
+        'time': _formatTime(_elapsedMilliseconds),
+        'text': _notesController.text,
+        'timestamp': DateTime.now().toIso8601String(),
+      });
+      notes.add(note);
+      await prefs.setStringList('notes', notes);
+      _notesController.clear();
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Note saved successfully')));
+    }
+  }
+
+  void _navigateToNotes() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => NotesPage()),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -182,24 +176,164 @@ class _StopwatchPageState extends State<StopwatchPage>
               style: TextStyle(fontSize: 48.0, fontWeight: FontWeight.bold),
             ),
             SizedBox(height: 20),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                ElevatedButton(
-                  onPressed: _isRunning ? null : _startTimer,
-                  child: Text('Start'),
-                ),
-                SizedBox(width: 10),
-                ElevatedButton(
-                  onPressed: _isRunning ? _stopTimer : null,
-                  child: Text('Stop'),
-                ),
-                SizedBox(width: 10),
-                ElevatedButton(onPressed: _resetTimer, child: Text('Reset')),
-              ],
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 20),
+              child: Column(
+                children: [
+                  TextField(
+                    controller: _notesController,
+                    decoration: InputDecoration(
+                      labelText: 'Notes',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  SizedBox(height: 10),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      ElevatedButton(onPressed: _saveNote, child: Text('Save')),
+                      ElevatedButton(
+                        onPressed: _navigateToNotes,
+                        child: Text('Notes'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            SizedBox(height: 20),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 20),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  ElevatedButton(
+                    onPressed: _isRunning ? null : _startTimer,
+                    style: ElevatedButton.styleFrom(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 16,
+                      ),
+                      textStyle: TextStyle(fontSize: 18),
+                    ),
+                    child: Text('Start'),
+                  ),
+                  ElevatedButton(
+                    onPressed: _isRunning ? _stopTimer : null,
+                    style: ElevatedButton.styleFrom(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 16,
+                      ),
+                      textStyle: TextStyle(fontSize: 18),
+                    ),
+                    child: Text('Stop'),
+                  ),
+                  ElevatedButton(
+                    onPressed: _resetTimer,
+                    style: ElevatedButton.styleFrom(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 16,
+                      ),
+                      textStyle: TextStyle(fontSize: 18),
+                    ),
+                    child: Text('Reset'),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class NotesPage extends StatefulWidget {
+  @override
+  _NotesPageState createState() => _NotesPageState();
+}
+
+class _NotesPageState extends State<NotesPage> {
+  List<Map<String, dynamic>> notes = [];
+  List<bool> selectedNotes = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadNotes();
+  }
+
+  Future<void> _loadNotes() async {
+    final prefs = await SharedPreferences.getInstance();
+    List<String> savedNotes = prefs.getStringList('notes') ?? [];
+    setState(() {
+      notes =
+          savedNotes
+              .map((note) => json.decode(note) as Map<String, dynamic>)
+              .toList();
+      selectedNotes = List.filled(notes.length, false);
+    });
+  }
+
+  Future<void> _deleteSelectedNotes() async {
+    final prefs = await SharedPreferences.getInstance();
+    List<String> savedNotes = prefs.getStringList('notes') ?? [];
+    List<String> updatedNotes = [];
+
+    for (int i = 0; i < savedNotes.length; i++) {
+      if (!selectedNotes[i]) {
+        updatedNotes.add(savedNotes[i]);
+      }
+    }
+
+    await prefs.setStringList('notes', updatedNotes);
+    await _loadNotes();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('Saved Notes')),
+      body: Column(
+        children: [
+          Expanded(
+            child: ListView.builder(
+              itemCount: notes.length,
+              itemBuilder: (context, index) {
+                return ListTile(
+                  leading: Checkbox(
+                    value: selectedNotes[index],
+                    onChanged: (value) {
+                      setState(() {
+                        selectedNotes[index] = value!;
+                      });
+                    },
+                  ),
+                  title: Text('${notes[index]['time']}'),
+                  subtitle: Text('${notes[index]['text']}'),
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: EdgeInsets.all(16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                ElevatedButton(
+                  onPressed: _deleteSelectedNotes,
+                  child: Text('Delete'),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: Text('Go Back'),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
