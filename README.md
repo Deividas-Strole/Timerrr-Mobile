@@ -1,4 +1,4 @@
-# timer
+# A Mobile Timer With Taking and Saving Notes Capability
 
 A new Flutter project.
 
